@@ -1,0 +1,54 @@
+Type: StateMachine
+Name:  ${vars.name}-offline-flow
+SpecVersion: v1
+Timeout: 300
+StartAt: TextSplit
+States:
+  - Type: Task
+    Name: TextSplit
+    Action: FC:InvokeFunction
+    TaskMode: RequestComplete
+    Parameters:
+      invocationType: Sync
+      resourceArn: acs:fc:::functions/${vars.name}-text-spliter/LATEST
+      body.$: $Context.Execution.Input
+    Next: Map
+  - Type: Map
+    Name: Map
+    ItemsPath: $Input.Body
+    Processor:
+      StartAt: Embedding
+      States:
+        - Type: Task
+          Name: Embedding
+          Action: HTTP:Request
+          TaskMode: RequestComplete
+          Parameters:
+            method: POST
+            body.$: |-
+              {
+                "input": {
+                      "source_sentence": [$Input.document]
+                  }
+              }
+            url: ${resources.Embedding.output.urlIntranet}
+          OutputConstructor:
+            embedding.$: stringToJson($Output.Body).Data.text_embedding[0]
+            source.$: $Input.source
+            document.$: $Input.document
+          Next: InsertDB(PGVector)
+        - Type: Task
+          Name: InsertDB(PGVector)
+          Action: FC:InvokeFunction
+          TaskMode: RequestComplete
+          Parameters:
+            invocationType: Sync
+            resourceArn: >-
+              acs:fc:::functions/${vars.name}-pgvector-helper/LATEST
+            body.$: |-
+              {
+                "action": "insert",
+                "body": $Input
+              }
+          End: true
+    End: true
