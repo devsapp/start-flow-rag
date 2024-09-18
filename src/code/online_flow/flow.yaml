@@ -1,0 +1,73 @@
+Type: StateMachine
+Name:  ${vars.name}-online-flow
+SpecVersion: v1
+Timeout: 60
+StartAt: Embedding
+States:
+  - Type: Task
+    Name: Embedding
+    Action: HTTP:Request
+    TaskMode: RequestComplete
+    Parameters:
+      method: POST
+      body.$: |-
+        {
+          "input": {
+                "source_sentence": [$Input.query]
+            }
+        }
+      url: ${resources.Embedding.output.urlIntranet}
+    OutputConstructor:
+      embedding.$: stringToJson($Output.Body).Data.text_embedding[0]
+      query.$: $Input.query
+    Next: QueryDB(PGVector)
+  - Type: Task
+    Name: QueryDB(PGVector)
+    Action: FC:InvokeFunction
+    TaskMode: RequestComplete
+    Parameters:
+      invocationType: Sync
+      resourceArn: acs:fc:::functions/${vars.name}-pgvector-helper/LATEST
+      body.$: |-
+        {
+          "action": "query",
+          "body": $Input
+        }
+    OutputConstructor:
+      context.$: $Output
+      query.$: $Input.query
+    Next: BuildPrompt
+  - Type: Task
+    Name: BuildPrompt
+    Action: FC:InvokeFunction
+    TaskMode: RequestComplete
+    Parameters:
+      invocationType: Sync
+      resourceArn: acs:fc:::functions/${vars.name}-prompt-builder/LATEST
+      body.$: |-
+        {
+          "query": $Input.query,
+          "context": $Input.context
+        }
+    Next: LLM
+  - Type: Task
+    Name: LLM
+    Action: HTTP:Request
+    TaskMode: RequestComplete
+    Parameters:
+      method: POST
+      body.$: |-
+        {
+          "model": "llama3:8b",
+          "stream": true,
+          "messages": [
+              {
+                  "role": "user",
+                  "content": $Input.Body
+              }
+          ]
+        }
+      url: ${resources.LLM.output.urlIntranet}/v1/chat/completions
+      headers:
+        Content-Type: application/json
+    End: true

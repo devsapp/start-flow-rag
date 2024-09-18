@@ -1,0 +1,302 @@
+edition: 3.0.0
+name: start-rag-on-flow
+access: "{{ access }}"
+
+vars:
+  region: "{{ region }}"
+  name: "{{ projectname }}" #这里的 name 是 project name，用于作为资源前缀
+
+resources:
+  VectorDB:
+    component: rds
+    props:
+      region: ${vars.region}
+      name: "{{ db_name }}"
+      engine: "PostgreSQL:16.0"
+      database: "{{ db_database }}"
+      username: "{{ db_username }}"
+      password: "{{ db_password }}"
+      vpcID: auto
+      extensions:
+        - name: vector
+
+  PGVectorHelper:
+    component: fc3
+    props:
+      region: ${vars.region}
+      functionName: ${vars.name}-pgvector-helper
+      handler: index.handler
+      description: '用于插入/查询 Postgresql 数据库的 PGVector 帮助程序 '
+      layers:
+        - acs:fc:${vars.region}:1482204413454255:layers/pgvector/versions/1
+      runtime: python3.10
+      instanceLifecycleConfig:
+        preStop:
+          handler: index.preStop
+          timeout: 3
+        initializer:
+          handler: index.initializer
+          timeout: 3
+      environmentVariables:
+        PG_HOST: ${resources.VectorDB.output.host}
+        PG_USER: ${resources.VectorDB.props.username}
+        PG_PASSWORD: ${resources.VectorDB.props.password}
+        PG_DATABASE: ${resources.VectorDB.props.database}
+        dimension: '768' #dimension 和 embedding_model 配置要一致
+        tableName: start_flow_rag_table
+      code: code/pghelper
+      vpcConfig: auto
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+
+  TextSplitter:
+    component: fc3
+    props:
+      region: ${vars.region}
+      handler: index.handler
+      functionName: ${vars.name}-text-spliter
+      role: "{{splitter_role}}"
+      description: "读取知识库文件，并分割成段落"
+      timeout: 60
+      diskSize: 512
+      internetAccess: true
+      layers:
+        - acs:fc:${vars.region}:1482204413454255:layers/langchain/versions/1
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      runtime: python3.10
+      cpu: 0.35
+      memorySize: 512
+      code: code/splitter
+
+  LLM:
+    component: model
+    props:
+      region: ${vars.region}
+      name: ${vars.name}-llm
+      description: "CAP 托管的 ollama 服务，内置 llama3:8b 模型"
+      modelConfig:
+        sourceType: custom-container
+      role: "acs:ram::${config(\"AccountID\")}:role/aliyundevsdefaultrole"
+      timeout: 600
+      diskSize: 10240
+      cpu: 8
+      memorySize: 32768
+      gpuConfig:
+        gpuMemorySize: 16384
+        gpuType: fc.gpu.tesla.1
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      runtime: custom-container
+      customContainerConfig:
+        port: 8000
+        image: "registry.${vars.region}.aliyuncs.com/aliyun-fc/ollama:capv1"
+      httpTrigger: "auto"
+      environmentVariables:
+        MODEL: "llama3:8b"
+      # never used in deployment. Only used in console view
+      annotations:
+        modleID: "{{ llm_model}}"
+        instanceType: "{{ llm_instance_type }}"
+      provisionConfig:
+        target: {{ llm_instance_count }}
+        alwaysAllocateGPU: false
+        scheduledActions: []
+
+
+  Embedding:
+    component: model
+    props:
+      region: ${vars.region}
+      role: "acs:ram::${config(\"AccountID\")}:role/aliyundevsdefaultrole"
+      name: ${vars.name}-embedding
+      description: "CAP 托管的 embedding 模型"
+      modelConfig:
+        framework: modelscope
+        sourceType: modelscope
+        srcModelScopeModelID: "{{ embedding_model }}"
+        srcModelScopeModelRevision:
+      cpu: 8
+      memorySize: 32768
+      diskSize: 10240
+      gpuConfig:
+        gpuMemorySize: 16384
+        gpuType: fc.gpu.tesla.1
+      nasConfig: auto
+      vpcConfig: auto
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      timeout: 6000
+      annotations:
+        instanceType: "{{ embedding_instance_type }}"
+      provisionConfig:
+        target: {{ embedding_instance_count }}
+        alwaysAllocateGPU: false
+        scheduledActions: []
+
+  PromptBuilder:
+    component: fc3
+    props:
+      region: ${vars.region}
+      handler: index.handler
+      description: "提示词生成器"
+      timeout: 60
+      diskSize: 512
+      internetAccess: true
+      functionName: ${vars.name}-prompt-builder
+      runtime: python3.10
+      cpu: 0.35
+      memorySize: 512
+      code: code/prompt_builder
+      logConfig: auto
+
+
+  OnlineFlow:
+    component: flow
+    props:
+      name: ${vars.name}-online-flow
+      region: ${vars.region}
+      description: 'CAP AI online flow'
+      definition: ${yaml(file('code/online_flow/flow.yaml'))}
+      roleArn: "{{ online_flow_role_arn }}"
+      executionMode: 'Express'
+
+  OfflineFlow:
+    component: flow
+    props:
+      name: ${vars.name}-offline-flow
+      region: ${vars.region}
+      description: 'CAP AI offline flow'
+      definition: ${yaml(file('code/offline_flow/flow.yaml'))}
+      roleArn: "{{ offline_flow_role_arn }}"
+      executionMode: 'Express'
+
+  GatewayChat:
+    component: fc3
+    props:
+      region: ${vars.region}
+      handler: index.handler
+      description: '将 LLM 转换成 OpenAI 规范，方便开源 WebUI 统一调用'
+      role: "{{gateway_role}}"
+      timeout: 60
+      diskSize: 512
+      internetAccess: true
+      layers:
+        - acs:fc:${vars.region}:official:layers/Python3-Flask2x/versions/2
+        - acs:fc:${vars.region}:1482204413454255:layers/cloudflow/versions/1
+        - acs:fc:${vars.region}:1482204413454255:layers/fastapi/versions/2
+      customRuntimeConfig:
+        port: 8000
+        command:
+          - python3
+          - main.py
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      functionName: ${vars.name}-gateway-chat
+      runtime: custom.debian10
+      cpu: 0.35
+      instanceConcurrency: 20
+      memorySize: 512
+      environmentVariables:
+        PATH: >-
+          /var/fc/lang/python3.10/bin:/usr/local/bin/apache-maven/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/ruby/bin:/opt/bin:/code:/code/bin
+        PYTHONPATH: /opt/python:/code
+        LD_LIBRARY_PATH: >-
+          /code:/code/lib:/usr/local/lib:/opt/lib:/opt/php8.1/lib:/opt/php8.0/lib:/opt/php7.2/lib
+        FLOW_NAME: ${resources.OnlineFlow.props.name}
+      code: code/gateway_chat
+      triggers:
+        - triggerConfig:
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            authType: anonymous
+            disableURLInternet: false
+          triggerName: defaultTrigger
+          description: ''
+          qualifier: LATEST
+          triggerType: http
+
+  WebUI:
+    component: fc3
+    props:
+      region: ${vars.region}
+      handler: index.handler
+      description: "在线问答的 WebUI：将开源项目 ChatGPT-NextWeb 部署到阿里云函数计算"
+      timeout: 60
+      diskSize: 512
+      internetAccess: true
+      functionName: ${vars.name}-webui-nextchat
+      runtime: custom-container
+      cpu: 0.35
+      customContainerConfig:
+        image: registry-vpc.${vars.region}.aliyuncs.com/aliyun-fc/nextchat:v1
+        port: 3000
+      instanceConcurrency: 20
+      environmentVariables:
+        flow_name: ${resources.OfflineFlow.props.name}
+        BASE_URL: ${resources.GatewayChat.info.url.system_intranet_url}
+        CUSTOM_MODELS: -all,llama3
+      memorySize: 512
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      triggers:
+        - triggerConfig:
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            authType: anonymous
+            disableURLInternet: false
+          triggerName: defaultTrigger
+          description: ''
+          qualifier: LATEST
+          triggerType: http
+      customDomain:
+        protocol: "HTTP"
+        route:
+          path: "/*"
+          qualifier: "LATEST"
+        domainName: auto
+
+  GatewayOSSTriggerStream:
+    component: fc3
+    props:
+      region: ${vars.region}
+      handler: index.handler
+      role: "{{gateway_oss_role}}"
+      description: "接收 OSS 事件触发请求的网关"
+      timeout: 60
+      diskSize: 512
+      internetAccess: true
+      layers:
+        - acs:fc:${vars.region}:1482204413454255:layers/langchain/versions/1
+        - acs:fc:${vars.region}:1482204413454255:layers/cloudflow/versions/1
+      logConfig: ${resources.PromptBuilder.output.logConfig}
+      functionName: ${vars.name}-gateway-oss-trigger-stream
+      runtime: python3.10
+      cpu: 0.35
+      memorySize: 512
+      environmentVariables:
+        flow_name: ${resources.OfflineFlow.props.name}
+      code: code/oss_gateway
+      asyncInvokeConfig:
+        asyncTask: true
+        maxAsyncEventAgeInSeconds: 86400
+        maxAsyncRetryAttempts: 3
+      triggers:
+        - sourceArn: "acs:oss:${vars.region}:${config(\"AccountID\")}:{{ oss_bucket }}"
+          triggerConfig:
+            events:
+              - oss:ObjectCreated:PutObject
+              - oss:ObjectCreated:PostObject
+              - oss:ObjectCreated:CompleteMultipartUpload
+              - oss:ObjectCreated:PutSymlink
+            filter:
+              key:
+                prefix: "{{oss_prefix}}"
+                suffix: ''
+          triggerName: oss
+          description: ''
+          qualifier: LATEST
+          triggerType: oss
+          invocationRole: "{{oss_invocation_role}}"

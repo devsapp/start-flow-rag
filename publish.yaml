@@ -1,0 +1,243 @@
+Edition: 3.0.0
+Type: Project
+Name: start-rag-on-flow
+Version: dev
+Provider:
+  - 阿里云
+Description: 基于流程构建 RAG 应用
+HomePage: https://www.serverless-devs.com
+Tags:
+  - 大模型
+  - AIGC
+Category: 人工智能
+Service:
+  函数计算:
+    Authorities:
+      - AliyunFCFullAccess
+    Description: RAG 应用中业务逻辑执行用到的计算资源。包含：原始文档分割、向量化数据入库、WebUI 页面、Prompt 构建。RAG 应用模型服务托管使用的 GPU 资源。
+
+  云工作流:
+    Authorities:
+      - AliyunFnFFullAccess
+    Description: RAG 应用中用到的离线流程与在线流程。
+
+  云数据库RDS:
+    Authorities:
+      - AliyunRDSFullAccess
+    Description: RAG 应用中使用的数据库。默认类型：PostgreSQL16.0，实例规格：pg.x8.medium.1
+
+  对象存储:
+    Authorities:
+      - AliyunFCServerlessDevsRolePolicy
+    Description: 上传知识库的存储桶。知识库上传后会自动触发文档的分割与入库
+
+  日志服务:
+    Authorities:
+      - AliyunFCServerlessDevsRolePolicy
+    Description: 应用日志库。存储服务执行日志
+
+  专有网络:
+    Authorities:
+      - AliyunFCServerlessDevsRolePolicy
+    Description: 云数据库所在的专有网络
+
+Effective: Public
+Parameters:
+  type: object
+  additionalProperties: false
+  required:
+    - region
+    - name
+    - db_name
+    - db_database
+    - db_username
+    - db_password
+    - splitter_role
+    - llm_model
+    - embedding_model
+    - online_flow_role_arn
+    - offline_flow_role_arn
+    - gateway_role
+    - gateway_oss_role
+    - oss_trigger_role_arn
+    - oss_bucket
+    - oss_prefix
+
+  properties:
+    region:
+      title: 地域
+      type: string
+      default: cn-hangzhou
+      description: 创建应用所在的地区
+      required: true
+      enum:
+        - cn-hangzhou
+
+    projectname:
+      title: 项目名
+      type: string
+      default: rag_on_flow_${default-suffix}
+      pattern: "^[a-zA-Z_][a-zA-Z0-9-_]{0,127}$"
+      description: 项目名称，只能包含字母、数字、下划线和中划线。不能以数字、中划线开头。长度在 1-128 之间
+
+    db_name:
+      title: 实例名称
+      type: string
+      default: "flow_rag_pgsql_by_CAP"
+      description: Postgresql 实例名称
+
+    db_database:
+      title: 数据库名称
+      type: string
+      default: "flow_rag_database"
+      description: Postgresql 数据库名称
+
+    db_username:
+      title: 用户名称
+      type: string
+      default: "cap"
+      description: Postgresql 数据库用户名
+
+    db_password:
+      title: 密码
+      type: string
+      default: "AwesomeCAP_2024"
+      description: Postgresql 数据库密码
+
+    splitter_role:
+      title: 文件切分函数需要的角色
+      type: string
+      default: "AliyunFCDefaultRole"
+      pattern: "^acs:ram::[0-9]*:role/.*$"
+      description: 函数中需要基于此角色访问 OSS 文件，并对文件进行切分
+      required: true
+      x-role:
+        name: AliyunFCDefaultRole
+        service: FC
+        authorities:
+          - AliyunOSSFullAccess
+
+    llm_model:
+      title: 模型 ID
+      type: string
+      default: llama3:8b
+      description: LLM 模型 ID, 默认使用 llama3:8b
+      enum:
+        - llama3:8b
+
+    embedding_model:
+      title: Embedding 模型 ID
+      type: string
+      default: 'iic/nlp_corom_sentence-embedding_chinese-base'
+      description: ModelScope 模型 ID, 可以从 https://modelscope.cn/models 模型页获取
+      enum: # TODO: add more enum models
+        - iic/nlp_corom_sentence-embedding_chinese-base
+
+    embedding_instance_type:
+      title: GPU 卡型
+      type: string
+      default: Tesla 系列
+      description: Tesla 系列默认规格为 GPU:16GB, CPU:8vcpu, Memory:32GB。部署完成后您可以在模型配置中更改资源规格。
+      enum:
+        - Tesla 系列
+
+    llm_instance_type:
+      title: GPU 卡型
+      type: string
+      default: Tesla 系列
+      description: Tesla 系列默认规格为 GPU:16GB, CPU:8vcpu, Memory:32GB。Tesla 系列推理速度较慢，部署完成后您可以在模型配置中更改资源规格。
+      enum:
+        - Tesla 系列
+
+    embedding_instance_count:
+      title: 实例数
+      type: string
+      default: 1
+      description: 运行模型的实例数
+
+    llm_instance_count:
+      title: 实例数
+      type: string
+      default: 1
+      description: 运行模型的实例数
+
+    online_flow_role_arn:
+      title: 流程角色
+      type: string
+      default: ""
+      pattern: "^acs:ram::[0-9]*:role/.*$"
+      description: "流程运行时需要使用的服务角色，流程会使用此角色调度您的函数。"
+      required: true
+      x-role:
+        name: fnf-execution-default-role
+        service: FNF
+        authorities:
+          - AliyunFCInvocationAccess
+
+    offline_flow_role_arn:
+      title: 流程角色
+      type: string
+      default: ""
+      pattern: "^acs:ram::[0-9]*:role/.*$"
+      description: "流程运行时需要使用的服务角色，流程会使用此角色调度您的函数。"
+      required: true
+      x-role:
+        name: fnf-execution-default-role
+        service: FNF
+        authorities:
+          - AliyunFCInvocationAccess
+
+    gateway_role:
+      title: 函数角色
+      type: string
+      default: 'AliyunFCDefaultRole'
+      pattern: '^acs:ram::[0-9]*:role/.*$'
+      description: 函数中需要基于此角色访问 CloudFlow，并调用 StartExecution 调用在线查询流程
+      required: true
+      x-role:
+        name: AliyunFCDefaultRole # 角色名
+        service: FC # 服务账号
+        authorities:
+          - AliyunFnFFullAccess
+
+    gateway_oss_role:
+      title: 函数角色
+      type: string
+      default: 'AliyunFCDefaultRole'
+      pattern: '^acs:ram::[0-9]*:role/.*$'
+      description: 函数中需要基于此角色访问 CloudFlow，并调用 StartExecution 调用离线数据处理流程
+      required: true
+      x-role:
+        name: AliyunFCDefaultRole
+        service: FC
+        authorities:
+          - AliyunFnFFullAccess
+
+    oss_invocation_role:
+      title: OSS 触发器角色
+      type: string
+      default: "aliyunosseventnotificationrole"
+      pattern: "^acs:ram::[0-9]*:role/.*$"
+      description: OSS 使用此角色来发送事件通知来调用函数
+      required: true
+      x-role:
+        name: aliyunosseventnotificationrole
+        service: OSS
+        authorities:
+          - AliyunFCInvocationAccess
+
+    oss_bucket:
+      title: 对象存储存储桶名
+      type: string
+      default: ""
+      description: 用于存放 RAG 知识库。文件上传至 OSS 后，将会自动触发 RAG 知识库向量化的过程
+      required: true
+      x-bucket:
+        dependency:
+          - region
+
+    oss_prefix:
+      title: 对象存储存储桶前缀
+      type: string
+      default: CAP/rag/flow
+      description: 将文件上传至存储桶特定前缀时才自动执行知识库向量化过程。
