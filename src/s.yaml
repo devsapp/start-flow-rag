@@ -5,6 +5,9 @@ access: "{{ access }}"
 vars:
   region: "{{ region }}"
   name: "{{ projectname }}" #这里的 name 是 project name，用于作为资源前缀
+  db_username: "{{ db_username }}"
+  db_password: "{{ db_password }}"
+  db_database: "{{ db_database }}"
 
 resources:
   VectorDB:
@@ -13,9 +16,9 @@ resources:
       region: ${vars.region}
       name: "{{ db_name }}"
       engine: "PostgreSQL:16.0"
-      database: "{{ db_database }}"
-      username: "{{ db_username }}"
-      password: "{{ db_password }}"
+      database: ${vars.db_database}
+      username: ${vars.db_username}
+      password: ${vars.db_password}
       vpcID: auto
       extensions:
         - name: vector
@@ -39,9 +42,9 @@ resources:
           timeout: 3
       environmentVariables:
         PG_HOST: ${resources.VectorDB.output.host}
-        PG_USER: ${resources.VectorDB.props.username}
-        PG_PASSWORD: ${resources.VectorDB.props.password}
-        PG_DATABASE: ${resources.VectorDB.props.database}
+        PG_USER: ${vars.db_username}
+        PG_PASSWORD: ${vars.db_password}
+        PG_DATABASE: ${vars.db_database}
         dimension: '768' #dimension 和 embedding_model 配置要一致
         tableName: start_flow_rag_table
       code: code/pghelper
