@@ -1,0 +1,16 @@
+shared: # 共享变量
+  db_database:
+    title: 数据库名称
+    type: string
+    default: "flow_rag_database_by_dipper"
+    description: Postgresql 数据库名称
+  db_username:
+    title: 用户名称
+    type: string
+    default: "cap"
+    description: Postgresql 数据库用户名
+  db_password:
+    title: 密码
+    sensitive: true
+    default: "AwesomeCAP_2024"
+    description: Postgresql 数据库密码
